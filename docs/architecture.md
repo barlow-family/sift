@@ -105,16 +105,16 @@ Keep responsibilities separated so the gym interface does not become the data mo
 
 | Table | Important columns | Purpose |
 |---|---|---|
-| workspaces | id, owner_id, name, timestamps | User-owned data boundary |
-| datasets | id, workspace_id, key, name, domain | Separates collections/use cases |
-| items | id, dataset_id, name, description, attributes JSONB, archived_at, timestamps | Generic records |
-| categories | id, dataset_id, name, category_type | User-defined classification |
-| item_categories | item_id, category_id | Many-to-many item/category relationship |
-| routines | id, dataset_id, name, timestamps | Named exercise collection; no weekday or calendar assignment |
-| routine_items | routine_id, item_id, position | Ordered items in a routine |
-| item_values | id, item_id, value_key, numeric_value, unit, updated_at | Current named numeric values, stored consistently for conversion |
-| item_value_history | id, item_id, value_key, numeric_value, unit, changed_at, changed_by | Dated record of each value change |
+| workspaces | id, owner_id, name, timestamps | User-owned data boundary; one workspace per user |
 | workspace_settings | workspace_id, preferred_weight_unit | Preferred display unit: kg or lb |
+| datasets | id, workspace_id, key, name, domain | Separates collections/use cases |
+| items | id, dataset_id, name, description, attributes JSONB, is_favorite, archived_at, timestamps | Generic records and archive/favourite state |
+| categories | id, dataset_id, name, category_type | User-defined classification |
+| item_categories | dataset_id, item_id, category_id | Many-to-many item/category relationship |
+| routines | id, dataset_id, name, description, timestamps | Named exercise collection; no weekday or calendar assignment |
+| routine_items | dataset_id, routine_id, item_id, position | Ordered items in a routine |
+| item_values | id, item_id, value_key, numeric_value, unit, timestamps | Current named numeric values |
+| item_value_history | id, item_id, value_key, numeric_value, unit, changed_at, changed_by | Dated record of each value change |
 
 Use UUID primary keys, foreign keys, sensible uniqueness constraints and created/updated timestamps. Use database constraints to prevent duplicate category links and invalid relationships.
 
@@ -152,10 +152,11 @@ Users can choose kilograms or pounds as their preferred display unit. Store weig
 ### 5.2 Updating an exercise's current weight
 
 1. The user edits the current weight field on an exercise.
-2. The UI validates that the value is a valid non-negative number and has a supported unit.
-3. The service updates the matching item_values row.
-4. Supabase checks the caller's JWT and database RLS policies.
-5. The UI refreshes the displayed current value and reports success or failure.
+2. The UI validates a non-negative number and converts lb input to canonical kg if required.
+3. The service upserts the matching item_values row with unit = kg for current_weight.
+4. A PostgreSQL trigger appends the dated item_value_history row in the same transaction.
+5. Supabase checks the caller's JWT and database RLS policies.
+6. The UI refreshes the displayed current value and reports success or failure.
 
 This operation does not create a workout-session record.
 
@@ -174,13 +175,17 @@ This operation does not create a workout-session record.
 
 Use Supabase Auth with individual user accounts. Each user has a private workspace and their own data. Each workspace has one owner in the initial version. Multi-user sharing and collaboration are out of scope unless separately approved.
 
-### 6.2 Row Level Security
+### 6.2 Automatic workspace provisioning
+
+The initial migration adds an `auth.users` trigger that creates one private workspace, default workspace settings (kg), and the Gym dataset for each new account. The frontend must not create duplicate workspace or Gym records during signup.
+
+### 6.3 Row Level Security
 
 Enable RLS on every table exposed through the Supabase Data API. Policies must ensure that a signed-in user can access a row only when it belongs to a workspace they own. Apply the same ownership rule consistently through related datasets, items, categories, routines and values.
 
 Do not rely on frontend filtering or hidden UI controls as security. Test both allowed and denied access paths.
 
-### 6.3 API keys and secrets
+### 6.4 API keys and secrets
 
 - The browser may use the Supabase project URL and publishable key.
 - These values are configuration, not a security boundary; RLS is what protects data.
@@ -227,10 +232,11 @@ Keep schema changes in the repository:
 
     supabase/
       migrations/
-        YYYYMMDDHHMMSS_initial_schema.sql
+        20261118190000_initial_schema.sql
       seed.sql                 Optional development data
 
 - Migrations are the source of truth for database structure.
+- The initial migration creates the generic data model, automatic user provisioning, weight history trigger and RLS policies.
 - Apply migrations to a development Supabase project first.
 - Verify policies and constraints before applying to production.
 - Do not make undocumented manual production schema changes.
