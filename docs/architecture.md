@@ -1,6 +1,6 @@
 # Victor App — System Architecture
 
-**Status:** Proposed architecture  
+**Status:** Confirmed architecture decisions  
 **Hosting:** Netlify  
 **Backend:** Supabase  
 **Initial domain:** Gym exercise and routine tracking  
@@ -46,11 +46,11 @@ A Netlify Function is not required for the initial CRUD workflow. Add server-sid
 
 | Area | Proposed choice | Reason |
 |---|---|---|
-| Frontend | React + TypeScript + Vite | Component-based UI, typed code and straightforward static build |
+| Frontend | React + TypeScript + Vite | Confirmed framework |
 | Styling | CSS approach to be selected during UI design | Keep presentation independent from data logic |
 | Hosting | Netlify | Hosts the built frontend and deploys from GitHub |
 | Database | Supabase PostgreSQL | Relational data, constraints, indexes and JSONB for flexible attributes |
-| Authentication | Supabase Auth | Provides user identity for private, cross-device data |
+| Authentication | Supabase Auth with individual accounts | Confirmed; each user has private data |
 | Database access | @supabase/supabase-js | Official JavaScript client |
 | Schema changes | SQL migrations committed to Git | Repeatable, reviewable database changes |
 | Tests | Unit and browser-level integration tests | Verify domain logic, permissions and workflows |
@@ -97,7 +97,7 @@ Keep responsibilities separated so the gym interface does not become the data mo
 - An **item** is a generic record in a dataset. In the gym dataset, an item represents an exercise.
 - An **attribute** stores flexible item-specific information without adding gym-only columns to the generic item table.
 - A **category** classifies items. An item may belong to multiple categories.
-- A **routine** is an ordered list of items, such as a Tuesday workout.
+- A **routine** is a named collection of items that the user can choose at any time; it is not assigned to a weekday or calendar date.
 - A **routine item** links an existing item to a routine and stores its position.
 - An **item value** stores a current named numeric value, such as an exercise's current working weight.
 
@@ -110,9 +110,11 @@ Keep responsibilities separated so the gym interface does not become the data mo
 | items | id, dataset_id, name, description, attributes JSONB, archived_at, timestamps | Generic records |
 | categories | id, dataset_id, name, category_type | User-defined classification |
 | item_categories | item_id, category_id | Many-to-many item/category relationship |
-| routines | id, dataset_id, name, day_key, timestamps | Named routine or day-specific list |
+| routines | id, dataset_id, name, timestamps | Named exercise collection; no weekday or calendar assignment |
 | routine_items | routine_id, item_id, position | Ordered items in a routine |
-| item_values | id, item_id, value_key, numeric_value, unit, updated_at | Current named numeric values |
+| item_values | id, item_id, value_key, numeric_value, unit, updated_at | Current named numeric values, stored consistently for conversion |
+| item_value_history | id, item_id, value_key, numeric_value, unit, changed_at, changed_by | Dated record of each value change |
+| workspace_settings | workspace_id, preferred_weight_unit | Preferred display unit: kg or lb |
 
 Use UUID primary keys, foreign keys, sensible uniqueness constraints and created/updated timestamps. Use database constraints to prevent duplicate category links and invalid relationships.
 
@@ -124,17 +126,17 @@ The items.attributes JSONB column is for flexible domain-specific metadata (for 
 - Item: Dumbbell shoulder press
 - Categories: Upper body, Shoulders
 - Attributes: optional notes, equipment or preference metadata
-- Item value: current_weight = 20, unit = kg
-- Routine: Tuesday
-- Routine item: links the exercise to Tuesday at its chosen position
+- Item value: current_weight = 20 kg (canonical stored value)
+- Routine: a named collection, for example Push Day
+- Routine item: links the exercise to the collection at its chosen position
 
 The same core schema can later represent a books dataset or family-tree dataset by defining different item attributes and categories. Those future domain interfaces are not part of the first release.
 
-### 4.4 Weight progress decision
+### 4.4 Weight progress and units
 
-The discussion prioritises current weight over workout-session history. The first implementation should therefore treat item_values as the authoritative current value.
+Dated weight history is required in the first release. `item_values` holds the current value, while `item_value_history` records each change with its timestamp and actor. Updating a weight must update the current value and append its history entry atomically. Incorrect history entries must be correctable or removable.
 
-Dated value history is an optional extension and remains an open product decision. If approved, add an item_value_history table containing the item value key, previous/new value, unit, change timestamp and actor. Do not introduce workout-session, set or rep tables to implement this feature.
+Users can choose kilograms or pounds as their preferred display unit. Store weight values consistently in kilograms and convert for display and input according to the user's preference. Do not introduce workout-session, set or rep tables to implement this feature.
 
 ## 5. Data access and application flows
 
@@ -159,19 +161,18 @@ This operation does not create a workout-session record.
 
 ### 5.3 Editing routines
 
+- Routines are named, standalone collections and are not tied to weekdays or calendar dates.
+- Users can create multiple routines, choose among them and filter routines/exercises using categories and other supported attributes.
 - Routines reference existing items; they do not duplicate exercise records.
-- Adding an exercise creates a routine_items relationship.
-- Reordering exercises updates their position values.
+- Adding an exercise creates a routine_items relationship; reordering updates its position.
 - Removing an exercise from a routine removes the relationship, not the exercise itself.
-- Deleting or archiving an exercise must have an explicit, confirmed behaviour for its routine links.
+- Archiving an exercise hides it from normal lists and prevents adding it to new routines, but preserves its history and existing routine links. Archived exercises can be restored.
 
 ## 6. Authentication and security
 
-### 6.1 Recommended access model
+### 6.1 Confirmed access model
 
-The requirements leave account support unresolved. This architecture recommends Supabase Auth from the beginning because user identity is needed for private data and reliable cross-device access.
-
-Each workspace has one owner in the initial version. Multi-user sharing and collaboration are out of scope unless separately approved.
+Use Supabase Auth with individual user accounts. Each user has a private workspace and their own data. Each workspace has one owner in the initial version. Multi-user sharing and collaboration are out of scope unless separately approved.
 
 ### 6.2 Row Level Security
 
@@ -244,7 +245,7 @@ Keep schema changes in the repository:
 - Prevent duplicate submissions while a mutation is in progress.
 - Confirm destructive actions.
 - Use database constraints as the final integrity safeguard, even when the UI validates inputs.
-- Avoid adding realtime subscriptions or offline write queues until a concrete requirement justifies their complexity.
+- The initial app is online-only: an internet connection is required to load, edit and save data. Do not implement offline caching, offline writes or synchronisation.
 
 ## 10. Testing strategy
 
@@ -271,31 +272,38 @@ Keep schema changes in the repository:
 - Correct or delete an incorrect value.
 - Verify that no set, rep or workout-session entry is required.
 
-## 11. Initial implementation sequence
+## 11. Responsive design and connectivity
 
-1. Confirm framework, authentication and unresolved product decisions.
-2. Scaffold the frontend and connect it to Netlify.
-3. Create the Supabase project and configure environment variables.
-4. Implement the initial schema, constraints and RLS policies as migrations.
-5. Implement authentication and workspace ownership.
-6. Implement generic datasets, items and categories.
-7. Implement routines and routine-item ordering.
-8. Implement gym-specific exercise screens and current weight values.
-9. Implement filtering, validation, error states and tests.
+The interface must be responsive across desktop, tablet and mobile screens. Core workflows must remain usable on both small and large screens.
+
+The app is online-only. An internet connection is required for loading and all data operations.
+
+## 12. Confirmed implementation decisions
+
+| Area | Decision |
+|---|---|
+| Frontend | React + TypeScript + Vite |
+| Accounts | Individual Supabase Auth accounts; private user data |
+| Weight history | Keep dated weight changes and the current value |
+| Routines | Named, standalone exercise collections; no weekday or date assignment |
+| Routine selection | Users choose collections and filter them/exercises using available filters |
+| Weight units | Support kg and lb with a selectable preferred display unit |
+| Exercise removal | Archive; preserve history and existing routine references; allow restoration |
+| Offline | Online-only; no offline caching or synchronisation |
+| Devices | Responsive desktop, tablet and mobile layout |
+
+## 13. Initial implementation sequence
+
+1. Scaffold the React + TypeScript + Vite frontend and connect it to Netlify.
+2. Create the Supabase project and configure environment variables.
+3. Implement schema, constraints, dated weight history and RLS policies as migrations.
+4. Implement individual authentication and workspace ownership.
+5. Implement generic datasets, items and categories.
+6. Implement named routines, routine-item ordering and filtering.
+7. Implement gym-specific exercise screens, unit preferences and weight history.
+8. Implement archive/restore behaviour, validation, error states and tests.
+9. Verify responsive behaviour across desktop, tablet and mobile.
 10. Deploy to a preview environment, verify security, then promote to production.
-
-## 12. Decisions still requiring confirmation
-
-These points were not settled in the source requirements and should be confirmed before implementation:
-
-- [ ] Confirm React + TypeScript + Vite, or select another frontend framework.
-- [ ] Confirm that Supabase Auth and individual user accounts are required for the first release.
-- [ ] Confirm whether dated weight history is required now or only current values.
-- [ ] Confirm routine model: reusable weekday templates, date-specific routines, or both.
-- [ ] Confirm supported weight units (kg only initially or user-selectable).
-- [ ] Confirm exercise deletion behaviour when the exercise is already in routines.
-- [ ] Confirm whether offline use is required.
-- [ ] Confirm whether the initial UI must support both mobile and desktop layouts.
 
 ## 13. Reference documentation
 
@@ -309,4 +317,4 @@ These points were not settled in the source requirements and should be confirmed
 
 ## Source
 
-This architecture translates docs/victor-app-requirements.md into a proposed technical design for Netlify and Supabase. Product decisions that were not made in the discussion are marked for confirmation rather than treated as settled requirements.
+This architecture translates docs/victor-app-requirements.md into the confirmed technical design for the initial Netlify and Supabase implementation.
