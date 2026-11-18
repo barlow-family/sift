@@ -91,7 +91,11 @@ export default function App() {
     setBusy(true)
     setMessage('')
     const result = mode === 'signup'
-      ? await supabase.auth.signUp({ email, password })
+      ? await supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: window.location.origin },
+        })
       : await supabase.auth.signInWithPassword({ email, password })
     if (result.error) setMessage(result.error.message)
     else if (mode === 'signup' && !result.data.session) {
