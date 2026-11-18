@@ -55,7 +55,7 @@ A Netlify Function is not required for the initial CRUD workflow. Add server-sid
 | Schema changes | SQL migrations committed to Git | Repeatable, reviewable database changes |
 | Tests | Unit and browser-level integration tests | Verify domain logic, permissions and workflows |
 
-These are recommendations, not claims that the repository already uses this stack. Confirm the frontend framework before scaffolding the app.
+These technology choices are confirmed for the initial implementation. Styling details will be selected during UI design.
 
 ## 3. Application layers
 
