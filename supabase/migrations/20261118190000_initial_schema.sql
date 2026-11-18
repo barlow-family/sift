@@ -182,14 +182,13 @@ create table public.routine_items (
   position integer not null check (position >= 0),
   created_at timestamptz not null default now(),
   primary key (routine_id, item_id),
+  constraint routine_items_unique_position
+    unique (routine_id, position) deferrable initially deferred,
   foreign key (routine_id, dataset_id)
     references public.routines(id, dataset_id) on delete cascade,
   foreign key (item_id, dataset_id)
     references public.items(id, dataset_id) on delete cascade
 );
-
-create unique index routine_items_position_idx
-  on public.routine_items (routine_id, position);
 
 create index routine_items_item_idx
   on public.routine_items (item_id, routine_id);
@@ -538,7 +537,9 @@ grant select, insert, update, delete on public.item_categories to authenticated;
 grant select, insert, update, delete on public.routines to authenticated;
 grant select, insert, update, delete on public.routine_items to authenticated;
 grant select, insert, update, delete on public.item_values to authenticated;
-grant select, update, delete on public.item_value_history to authenticated;
+grant select, delete on public.item_value_history to authenticated;
+grant update (value_key, numeric_value, unit, changed_at)
+  on public.item_value_history to authenticated;
 
 revoke all on public.workspaces, public.workspace_settings, public.datasets,
   public.items, public.categories, public.item_categories, public.routines,
