@@ -17,7 +17,7 @@ Build a flexible, filterable data-management app. The first supported use case i
 
 - [ ] Provide filters that let users show only the records relevant to the current task.
 - [ ] Support filtering by categories/attributes (for example, muscle group).
-- [ ] Support filtering or viewing a specific day's routine.
+- [ ] Support selecting named routines or exercise collections without assigning them to weekdays or calendar dates.
 - [ ] Allow unnecessary records to be hidden from the current view without deleting them.
 - [ ] Make it easy to switch between useful subsets of the same dataset.
 
@@ -25,7 +25,8 @@ Build a flexible, filterable data-management app. The first supported use case i
 
 ### Exercise catalogue
 
-- [ ] Let users create, edit, and delete exercises.
+- [ ] Let users create and edit exercises.
+- [ ] Let users archive and restore exercises instead of permanently deleting them.
 - [ ] Store each exercise as an individual record.
 - [ ] Allow exercises to be categorised by muscle group or other user-defined categories.
 - [ ] Store the current working weight for each exercise.
@@ -34,10 +35,10 @@ Build a flexible, filterable data-management app. The first supported use case i
 
 ### Routines
 
-- [ ] Let users create daily routines/lists (for example, a Tuesday workout).
+- [ ] Let users create multiple named routines or exercise collections.
 - [ ] Let users add existing exercises to a routine.
 - [ ] Let users organise the exercises within a routine.
-- [ ] Allow a routine view to show only the exercises assigned to that day.
+- [ ] Let users choose which routine to view at any time; routines are not assigned to days.
 - [ ] Make routine contents filterable by muscle group or other exercise attributes.
 
 ### Weight and progress
@@ -45,8 +46,9 @@ Build a flexible, filterable data-management app. The first supported use case i
 - [ ] Track weight at the individual exercise level.
 - [ ] Let users update an exercise's current weight when they increase or correct it.
 - [ ] Treat the latest saved weight as the exercise's current value.
-- [ ] Optionally retain dated weight changes so a trend line or graph can be generated later.
-- [ ] If dated changes are retained, allow an incorrect entry to be deleted or corrected so it does not distort progress reporting.
+- [ ] Retain dated weight changes in the first release so progress can be reviewed over time.
+- [ ] Allow incorrect historical weight entries to be corrected or deleted.
+- [ ] Support both kg and lb, with a user-selectable preferred display unit.
 
 ## 5. Explicit exclusions for the initial version
 
@@ -64,7 +66,7 @@ The intended workflow is to update the current weight associated with an exercis
 - [ ] Make filters prominent and easy to change.
 - [ ] Make it clear when a record is merely hidden by a filter versus deleted.
 - [ ] Provide a clear way to correct or delete accidental data entry.
-- [ ] Present a focused view for the selected day or category, rather than showing all data at once.
+- [ ] Present a focused view for the selected routine or category, rather than showing all data at once.
 
 ## 7. Future extensibility
 
@@ -75,25 +77,43 @@ The intended workflow is to update the current weight associated with an exercis
 ## 8. Acceptance criteria
 
 - [ ] A user can create an exercise, assign it to one or more categories, and set its current weight.
-- [ ] A user can create a day-specific routine and add exercises to it.
+- [ ] A user can create multiple named routines, add existing exercises and reorder them.
+- [ ] A user can select a routine and filter routines/exercises using available categories and attributes.
 - [ ] A user can filter the exercise catalogue or routine by category.
 - [ ] A user can update an exercise's weight without creating a workout-session record.
-- [ ] A user can correct or delete an incorrect weight entry.
+- [ ] A user can correct or delete an incorrect historical weight entry.
+- [ ] A user can switch their preferred weight display between kg and lb.
+- [ ] A user can archive an exercise while preserving its weight history and existing routine references, and restore it later.
+- [ ] Each user signs in to an individual account and can access only their own private data.
+- [ ] The app works responsively on desktop, tablet and mobile.
+- [ ] The app requires an internet connection; offline access and synchronisation are not required.
 - [ ] The app does not require set, rep, timer, or workout-session logging.
 - [ ] The underlying data model is not structurally tied to gym data and can represent a different domain through configurable records and attributes.
 
-## 9. Open questions to resolve before implementation
+## 9. Confirmed architecture and product decisions
 
-- [ ] Should dated weight changes be retained in the first release, or should the app store only the latest value initially?
-- [ ] Can an exercise belong to multiple routines and multiple muscle groups? (Recommended: yes.)
-- [ ] Should routines be reusable templates, calendar-day assignments, or both?
-- [ ] What units should weight support (kg only initially, or user-selectable units)?
-- [ ] Should deleting an exercise also remove it from routines, or should the app ask for confirmation?
-- [ ] Are user accounts, cross-device sync, and offline support required for the first release?
-- [ ] What is the expected initial device layout (desktop, mobile, or responsive)?
+| Area | Decision |
+|---|---|
+| Frontend | React + TypeScript + Vite |
+| Accounts | Individual Supabase Auth accounts; each user has private data |
+| Weight history | Keep dated weight changes and the current value |
+| Routines | Named, standalone exercise collections; no weekday or calendar scheduling |
+| Routine selection | Users choose collections as needed and filter routines/exercises using available filters |
+| Weight units | Support kg and lb with a selectable preferred display unit |
+| Exercise removal | Archive rather than permanently delete; preserve history and existing routine links; allow restoration |
+| Offline support | Online-only; internet required for loading and saving |
+| Device support | Responsive desktop, tablet and mobile layout |
+
+A user can add an exercise to multiple routines and assign multiple categories. Archiving hides an exercise from normal lists and prevents adding it to new routines, while preserving its history and existing routine references.
+
+## 10. Out of scope for the first release
+
+- Weekday or calendar-based routine scheduling.
+- Offline caching, offline editing and background synchronisation.
+- Set, rep, timer or workout-session logging.
 
 ---
 
 ## Source and interpretation
 
-Based on the *Victor app discussion* notes dated 18 November 2026. The gym-first priority, reusable/filterable data model, and exclusion of set/rep tracking are recorded decisions. The acceptance criteria and UX details above translate those decisions into testable build requirements. Items in **Open questions** were not settled in the notes and should be confirmed before implementation.
+Based on the *Victor app discussion* notes dated 18 November 2026 and the subsequent architecture decision process. The decisions in Section 9 were explicitly confirmed. The requirements and acceptance criteria reflect those decisions.
