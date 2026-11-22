@@ -32,7 +32,7 @@ Each Auth user receives one private workspace. The workspace receives a default 
 | `workspace_settings` | Preferred weight display unit (`kg` or `lb`) |
 | `datasets` | Reusable collections, initially seeded with `gym` |
 | `items` | Generic records; gym items are exercises |
-| `categories` | User-defined labels such as muscle groups |
+| `categories` | User-defined labels with a `category_type` for grouping/filtering (for example, muscle groups and equipment) |
 | `item_categories` | Many-to-many item/category links |
 | `routines` | Named, reusable exercise collections |
 | `routine_items` | Ordered exercise links within routines |
@@ -47,6 +47,7 @@ Each Auth user receives one private workspace. The workspace receives a default 
 - `items.archived_at` marks an archived record. Archiving does not delete its history or routine links.
 - `routine_items.position` controls exercise order. Position values must be unique within a routine; the constraint is deferred until transaction commit so a multi-row reorder can safely swap positions.
 - An exercise can belong to multiple routines and categories.
+- `categories.category_type` determines which category filter displays a label. The UI currently groups `muscle_group` separately; other types (such as `equipment` and `general`) appear in the equipment/other filter. New category types can be added without adding another hard-coded filter.
 - Composite foreign keys ensure that routines, items and categories linked together belong to the same dataset.
 - Archived items cannot be newly added to routines. Existing links are preserved.
 
