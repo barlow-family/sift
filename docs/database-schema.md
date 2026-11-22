@@ -52,6 +52,7 @@ Each Auth user receives one private workspace. The workspace receives a default 
 - An exercise can belong to multiple routines and categories.
 - `routine_categories` stores the categories selected for each routine. When adding exercises, selected muscle groups are OR-matched with one another, selected equipment/other categories are OR-matched with one another, and the two groups are AND-matched. An empty group does not restrict the picker.
 - `categories.category_type` determines which category filter displays a label. The UI currently groups `muscle_group` separately; other types (such as `equipment` and `general`) appear in the equipment/other filter. New category types can be added without adding another hard-coded filter.
+- `categories.category_type` determines which category filter displays a label. The UI currently groups `muscle_group` separately; other types (such as `equipment` and `general`) appear in the equipment/other filter. New category types can be added without adding another hard-coded filter.
 - Composite foreign keys ensure that routines, items and categories linked together belong to the same dataset.
 - Archived items cannot be newly added to routines. Existing links are preserved.
 
