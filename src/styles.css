@@ -26,3 +26,7 @@
 .filter-select{min-width:145px;padding:11px 12px;border-radius:9px;border:1px solid var(--line);background:#17211b;color:#edf2ec;font-size:12px}.routine-filters{display:flex;gap:10px;align-items:center;margin:20px 0 4px}.routine-filters .search-input{max-width:none}.routine-filters .filter-select{min-width:190px}@media(max-width:760px){.routine-filters{align-items:stretch;flex-direction:column}.routine-filters .filter-select{width:100%}.library-toolbar .toolbar-actions{flex-wrap:wrap}.library-toolbar .filter-select{flex:1}}
 
 .history-entry{gap:12px}.history-entry-info{display:grid;gap:5px;min-width:0}.history-entry-actions{display:flex;gap:7px;flex-wrap:wrap}.history-edit-input{width:125px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#101713;color:#edf2ec}.history-entry-actions .quiet-button{padding:7px 10px}@media(max-width:760px){.history-entry{flex-direction:column}.history-entry-actions{width:100%}}
+
+.avoid-label{font-size:9px;letter-spacing:1px;color:#e6b28f;border:1px solid #76533f;background:#30241d;border-radius:20px;padding:3px 8px}
+
+.weight-range-inputs{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:10px}.weight-range-inputs span{color:var(--muted);font-size:12px}.weight-range-inputs input{min-width:0}
