@@ -10,14 +10,15 @@ type Exercise = {
   name: string
   description: string | null
   is_favorite: boolean
+  attributes: { avoid?: boolean }
   archived_at: string | null
   categories: string[]
 }
 type Routine = { id: string; name: string; description: string | null }
 type RoutineLink = { routine_id: string; item_id: string; position: number }
-type ExerciseDraft = { name: string; description: string; categories: string; isFavorite: boolean; weight: string }
-type WeightHistoryEntry = { id: string; numeric_value: number; unit: string; changed_at: string }
-const emptyDraft: ExerciseDraft = { name: '', description: '', categories: '', isFavorite: false, weight: '' }
+type ExerciseDraft = { name: string; description: string; categories: string; isFavorite: boolean; isAvoided: boolean; weightMode: 'single' | 'range'; weight: string; weightLow: string; weightHigh: string }
+type WeightHistoryEntry = { id: string; value_key: string; numeric_value: number; unit: string; changed_at: string }
+const emptyDraft: ExerciseDraft = { name: '', description: '', categories: '', isFavorite: false, isAvoided: false, weightMode: 'single', weight: '', weightLow: '', weightHigh: '' }
 const KG_PER_LB = 0.45359237
 const displayWeight = (kg: number, unit: 'kg' | 'lb') => unit === 'kg' ? kg : kg / KG_PER_LB
 const storedWeight = (value: number, unit: 'kg' | 'lb') => unit === 'kg' ? value : value * KG_PER_LB
@@ -33,7 +34,7 @@ export default function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [dataset, setDataset] = useState<Dataset | null>(null)
   const [exercises, setExercises] = useState<Exercise[]>([])
-  const [weights, setWeights] = useState<Record<string, number>>({})
+  const [weights, setWeights] = useState<Record<string, { mode: 'single' | 'range'; low: number; high?: number }>>({})
   const [weightUnit, setWeightUnit] = useState<'kg' | 'lb'>('kg')
   const [historyExercise, setHistoryExercise] = useState<Exercise | null>(null)
   const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([])
@@ -46,6 +47,7 @@ export default function App() {
   const [search, setSearch] = useState('')
   const [exerciseCategoryFilter, setExerciseCategoryFilter] = useState('')
   const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [avoidOnly, setAvoidOnly] = useState(false)
   const [routineSearch, setRoutineSearch] = useState('')
   const [routineCategoryFilter, setRoutineCategoryFilter] = useState('')
   const [editorOpen, setEditorOpen] = useState(false)
@@ -66,10 +68,10 @@ export default function App() {
   async function loadLibrary(datasetId: string) {
     if (!supabase) return
     const [{ data: itemData, error: itemError }, { data: categoryData, error: categoryError }, { data: linkData, error: linkError }, { data: weightData, error: weightError }] = await Promise.all([
-      supabase.from('items').select('id, name, description, is_favorite, archived_at').eq('dataset_id', datasetId).order('name'),
+      supabase.from('items').select('id, name, description, is_favorite, attributes, archived_at').eq('dataset_id', datasetId).order('name'),
       supabase.from('categories').select('id, name, category_type').eq('dataset_id', datasetId).order('name'),
       supabase.from('item_categories').select('item_id, category_id').eq('dataset_id', datasetId),
-      supabase.from('item_values').select('item_id, numeric_value').eq('value_key', 'current_weight'),
+      supabase.from('item_values').select('item_id, value_key, numeric_value').in('value_key', ['current_weight', 'current_weight_low', 'current_weight_high']),
     ])
     if (itemError || categoryError || linkError || weightError) {
       setMessage(itemError?.message ?? categoryError?.message ?? linkError?.message ?? weightError?.message ?? 'Could not load your exercise library.')
@@ -85,7 +87,9 @@ export default function App() {
       ...item,
       categories: categoriesByItem.get(item.id) ?? [],
     })))
-    setWeights(Object.fromEntries((weightData ?? []).map(value => [value.item_id, Number(value.numeric_value)])))
+    const groupedWeights = new Map<string, Record<string, number>>()
+    for (const value of weightData ?? []) groupedWeights.set(value.item_id, { ...(groupedWeights.get(value.item_id) ?? {}), [value.value_key]: Number(value.numeric_value) })
+    setWeights(Object.fromEntries([...groupedWeights.entries()].map(([id, values]) => [id, values.current_weight_low !== undefined ? { mode: 'range' as const, low: values.current_weight_low, high: values.current_weight_high } : { mode: 'single' as const, low: values.current_weight ?? 0 }])))
     await loadRoutines(datasetId)
   }
 
@@ -183,7 +187,11 @@ export default function App() {
       description: exercise.description ?? '',
       categories: exercise.categories.join(', '),
       isFavorite: exercise.is_favorite,
-      weight: weights[exercise.id] === undefined ? '' : String(Number(displayWeight(weights[exercise.id], weightUnit).toFixed(2))),
+      isAvoided: Boolean(exercise.attributes?.avoid),
+      weightMode: weights[exercise.id]?.mode ?? 'single',
+      weight: weights[exercise.id]?.mode === 'single' ? String(Number(displayWeight(weights[exercise.id].low, weightUnit).toFixed(2))) : '',
+      weightLow: weights[exercise.id]?.mode === 'range' ? String(Number(displayWeight(weights[exercise.id].low, weightUnit).toFixed(2))) : '',
+      weightHigh: weights[exercise.id]?.mode === 'range' && weights[exercise.id].high !== undefined ? String(Number(displayWeight(weights[exercise.id].high!, weightUnit).toFixed(2))) : '',
     })
     setMessage('')
     setEditorOpen(true)
@@ -201,6 +209,7 @@ export default function App() {
       name,
       description: draft.description.trim() || null,
       is_favorite: draft.isFavorite,
+      attributes: { ...(editingId ? exercises.find(item => item.id === editingId)?.attributes : {}), avoid: draft.isAvoided },
     }
     const itemResult = editingId
       ? await supabase.from('items').update(itemPayload).eq('id', editingId).select('id').single()
@@ -249,30 +258,31 @@ export default function App() {
         return
       }
     }
-    const weightText = draft.weight.trim()
-    if (weightText) {
-      const enteredWeight = Number(weightText)
-      if (!Number.isFinite(enteredWeight) || enteredWeight < 0) {
-        setMessage('Enter a valid weight of zero or more.')
-        setSaving(false)
-        return
-      }
-      const canonicalKg = storedWeight(enteredWeight, weightUnit)
-      const { error: weightSaveError } = await supabase.from('item_values').upsert({
-        item_id: itemId, value_key: 'current_weight', numeric_value: Number(canonicalKg.toFixed(4)), unit: 'kg',
-      }, { onConflict: 'item_id,value_key' })
-      if (weightSaveError) {
-        setMessage(weightSaveError.message)
-        setSaving(false)
-        return
+    const entries: { item_id: string; value_key: string; numeric_value: number; unit: string }[] = []
+    const addWeight = (key: string, raw: string) => {
+      const value = Number(raw)
+      if (!raw.trim() || !Number.isFinite(value) || value < 0) return false
+      entries.push({ item_id: itemId, value_key: key, numeric_value: Number(storedWeight(value, weightUnit).toFixed(4)), unit: 'kg' })
+      return true
+    }
+    if (draft.weightMode === 'single') {
+      if (draft.weight.trim() && !addWeight('current_weight', draft.weight)) { setMessage('Enter a valid weight of zero or more.'); setSaving(false); return }
+      const { error: clearRangeError } = await supabase.from('item_values').delete().eq('item_id', itemId).in('value_key', ['current_weight_low', 'current_weight_high'])
+      if (clearRangeError) { setMessage(clearRangeError.message); setSaving(false); return }
+      if (entries.length) {
+        const { error } = await supabase.from('item_values').upsert(entries, { onConflict: 'item_id,value_key' })
+        if (error) { setMessage(error.message); setSaving(false); return }
+      } else {
+        const { error } = await supabase.from('item_values').delete().eq('item_id', itemId).eq('value_key', 'current_weight')
+        if (error) { setMessage(error.message); setSaving(false); return }
       }
     } else {
-      const { error: weightDeleteError } = await supabase.from('item_values').delete().eq('item_id', itemId).eq('value_key', 'current_weight')
-      if (weightDeleteError) {
-        setMessage(weightDeleteError.message)
-        setSaving(false)
-        return
-      }
+      if (!addWeight('current_weight_low', draft.weightLow) || !addWeight('current_weight_high', draft.weightHigh)) { setMessage('Enter both a valid low and high weight.'); setSaving(false); return }
+      if (entries[0].numeric_value > entries[1].numeric_value) { setMessage('The low value must be less than or equal to the high value.'); setSaving(false); return }
+      const { error: clearSingleError } = await supabase.from('item_values').delete().eq('item_id', itemId).eq('value_key', 'current_weight')
+      if (clearSingleError) { setMessage(clearSingleError.message); setSaving(false); return }
+      const { error } = await supabase.from('item_values').upsert(entries, { onConflict: 'item_id,value_key' })
+      if (error) { setMessage(error.message); setSaving(false); return }
     }
     await loadLibrary(dataset.id)
     setEditorOpen(false)
@@ -291,7 +301,7 @@ export default function App() {
     setHistoryExercise(exercise)
     setHistoryLoading(true)
     setWeightHistory([])
-    const { data, error } = await supabase.from('item_value_history').select('id, numeric_value, unit, changed_at').eq('item_id', exercise.id).eq('value_key', 'current_weight').order('changed_at', { ascending: false })
+    const { data, error } = await supabase.from('item_value_history').select('id, value_key, numeric_value, unit, changed_at').eq('item_id', exercise.id).in('value_key', ['current_weight', 'current_weight_low', 'current_weight_high']).order('changed_at', { ascending: false })
     if (error) setMessage(error.message)
     else setWeightHistory((data ?? []) as WeightHistoryEntry[])
     setHistoryLoading(false)
@@ -377,13 +387,14 @@ export default function App() {
     .filter(exercise => showArchived ? Boolean(exercise.archived_at) : !exercise.archived_at)
     .filter(exercise => !exerciseCategoryFilter || exercise.categories.includes(exerciseCategoryFilter))
     .filter(exercise => !favoritesOnly || exercise.is_favorite)
+    .filter(exercise => !avoidOnly || Boolean(exercise.attributes?.avoid))
     .filter(exercise => {
       const query = search.trim().toLowerCase()
       return !query || exercise.name.toLowerCase().includes(query) ||
         (exercise.description ?? '').toLowerCase().includes(query) ||
         exercise.categories.some(category => category.toLowerCase().includes(query))
     })
-    .sort((a, b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name)), [exercises, search, showArchived, exerciseCategoryFilter, favoritesOnly])
+    .sort((a, b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name)), [exercises, search, showArchived, exerciseCategoryFilter, favoritesOnly, avoidOnly])
 
   const filteredRoutines = useMemo(() => routines.filter(routine => {
     const query = routineSearch.trim().toLowerCase()
@@ -427,10 +438,10 @@ export default function App() {
       <div className="section-heading"><div><p className="eyebrow">YOUR COLLECTION</p><h2>{dataset?.name ?? 'Gym'}</h2></div><div className="unit-setting"><span>WEIGHT UNIT</span><select value={weightUnit} onChange={event => void changeWeightUnit(event.target.value as 'kg' | 'lb')} aria-label="Preferred weight unit"><option value="kg">kg</option><option value="lb">lb</option></select><span className="count-label">{exercises.filter(item => !item.archived_at).length} ACTIVE EXERCISES</span></div></div>
       <div className="library-toolbar">
         <input className="search-input" type="search" placeholder="Search exercises or categories…" value={search} onChange={event => setSearch(event.target.value)} />
-        <div className="toolbar-actions"><select className="filter-select" aria-label="Filter by category" value={exerciseCategoryFilter} onChange={event => setExerciseCategoryFilter(event.target.value)}><option value="">All categories</option>{exerciseCategories.map(category => <option key={category} value={category}>{category}</option>)}</select><button className={favoritesOnly ? 'quiet-button selected-button' : 'quiet-button'} onClick={() => setFavoritesOnly(!favoritesOnly)}>★ Favourites</button><button className={showArchived ? 'quiet-button selected-button' : 'quiet-button'} onClick={() => setShowArchived(!showArchived)}>{showArchived ? 'View active' : 'Archived'}</button><button className="primary-button add-button" onClick={openNewExercise}>＋ Add exercise</button></div>
+        <div className="toolbar-actions"><select className="filter-select" aria-label="Filter by category" value={exerciseCategoryFilter} onChange={event => setExerciseCategoryFilter(event.target.value)}><option value="">All categories</option>{exerciseCategories.map(category => <option key={category} value={category}>{category}</option>)}</select><button className={favoritesOnly ? 'quiet-button selected-button' : 'quiet-button'} onClick={() => setFavoritesOnly(!favoritesOnly)}>★ Favourites</button><button className={avoidOnly ? 'quiet-button selected-button' : 'quiet-button'} onClick={() => setAvoidOnly(!avoidOnly)}>Avoid</button><button className={showArchived ? 'quiet-button selected-button' : 'quiet-button'} onClick={() => setShowArchived(!showArchived)}>{showArchived ? 'View active' : 'Archived'}</button><button className="primary-button add-button" onClick={openNewExercise}>＋ Add exercise</button></div>
       </div>
       {dataLoading ? <div className="empty-state"><div className="loading-dot" /><p>Loading your exercises…</p></div> : visibleExercises.length === 0 ? <div className="empty-state"><div className="empty-icon">＋</div><h3>{showArchived ? 'No archived exercises' : search ? 'No matching exercises' : 'Your exercise library starts here'}</h3><p>{showArchived ? 'Exercises you archive will appear here. You can restore them at any time.' : search ? 'Try another search, or add a new exercise.' : 'Add your exercises, organise them with categories and mark your favourites.'}</p>{!showArchived && !search && <button className="primary-button add-button" onClick={openNewExercise}>Add your first exercise</button>}</div> : <div className="exercise-list">{visibleExercises.map(exercise => <article className="exercise-row" key={exercise.id}>
-        <div className="exercise-main"><div className="exercise-title-line"><h3>{exercise.name}</h3>{exercise.is_favorite && <span className="favorite">★ FAVOURITE</span>}</div>{weights[exercise.id] !== undefined && <p className="current-weight">{displayWeight(weights[exercise.id], weightUnit).toFixed(2).replace(/\.00$/, '')} {weightUnit} <span>CURRENT WEIGHT</span></p>}{exercise.description && <p>{exercise.description}</p>}{exercise.categories.length > 0 && <div className="category-chips">{exercise.categories.map(category => <span className="category-chip" key={category}>{category}</span>)}</div>}</div>
+        <div className="exercise-main"><div className="exercise-title-line"><h3>{exercise.name}</h3>{exercise.is_favorite && <span className="favorite">★ FAVOURITE</span>}{exercise.attributes?.avoid && <span className="avoid-label">AVOID</span>}</div>{weights[exercise.id] !== undefined && <p className="current-weight">{weights[exercise.id].mode === 'range' ? `${displayWeight(weights[exercise.id].low, weightUnit).toFixed(2).replace(/\.00$/, '')}–${displayWeight(weights[exercise.id].high ?? weights[exercise.id].low, weightUnit).toFixed(2).replace(/\.00$/, '')}` : displayWeight(weights[exercise.id].low, weightUnit).toFixed(2).replace(/\.00$/, '')} {weightUnit} <span>CURRENT WEIGHT</span></p>}{exercise.description && <p>{exercise.description}</p>}{exercise.categories.length > 0 && <div className="category-chips">{exercise.categories.map(category => <span className="category-chip" key={category}>{category}</span>)}</div>}</div>
         <div className="exercise-actions">{showArchived ? <button className="quiet-button" onClick={() => void setArchived(exercise, false)}>Restore</button> : <><button className="quiet-button" onClick={() => void openWeightHistory(exercise)}>History</button><button className="quiet-button" onClick={() => openEditExercise(exercise)}>Edit</button><button className="quiet-button archive-button" onClick={() => void setArchived(exercise, true)}>Archive</button></>}</div>
       </article>)}</div>}
       </>}
@@ -446,8 +457,9 @@ export default function App() {
           <label>Exercise name<input autoFocus value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} placeholder="e.g. Dumbbell bench press" required maxLength={100} /></label>
           <label>Description <span className="optional-label">OPTIONAL</span><textarea value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} placeholder="Add notes about this exercise…" rows={3} maxLength={1000} /></label>
           <label>Categories <span className="optional-label">OPTIONAL · SEPARATE WITH COMMAS</span><input value={draft.categories} onChange={event => setDraft({ ...draft, categories: event.target.value })} placeholder="e.g. Chest, Dumbbells, Push" /></label>
-          <label>Current weight <span className="optional-label">OPTIONAL · {weightUnit.toUpperCase()}</span><input type="number" min="0" step="0.01" value={draft.weight} onChange={event => setDraft({ ...draft, weight: event.target.value })} placeholder={`Enter weight in ${weightUnit}`} /></label>
+          <label>Current weight <span className="optional-label">OPTIONAL · {weightUnit.toUpperCase()}</span><select className="filter-select" value={draft.weightMode} onChange={event => setDraft({ ...draft, weightMode: event.target.value as 'single' | 'range' })}><option value="single">Single value</option><option value="range">Range</option></select>{draft.weightMode === 'single' ? <input type="number" min="0" step="0.01" value={draft.weight} onChange={event => setDraft({ ...draft, weight: event.target.value })} placeholder={`Enter weight in ${weightUnit}`} /> : <div className="weight-range-inputs"><input aria-label={`Low weight in ${weightUnit}`} type="number" min="0" step="0.01" value={draft.weightLow} onChange={event => setDraft({ ...draft, weightLow: event.target.value })} placeholder="Low value" /><span>to</span><input aria-label={`High weight in ${weightUnit}`} type="number" min="0" step="0.01" value={draft.weightHigh} onChange={event => setDraft({ ...draft, weightHigh: event.target.value })} placeholder="High value" /></div>}</label>
           <label className="favorite-toggle"><input type="checkbox" checked={draft.isFavorite} onChange={event => setDraft({ ...draft, isFavorite: event.target.checked })} /><span>Mark as favourite</span></label>
+          <label className="favorite-toggle"><input type="checkbox" checked={draft.isAvoided} onChange={event => setDraft({ ...draft, isAvoided: event.target.checked })} /><span>Mark as Avoid</span></label>
           <div className="editor-footer"><button type="button" className="quiet-button" onClick={() => setEditorOpen(false)}>Cancel</button><button className="primary-button add-button" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save changes' : 'Add exercise'}</button></div>
         </form>
       </section>
@@ -455,7 +467,7 @@ export default function App() {
     {historyExercise && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setHistoryExercise(null) }}>
       <section className="editor-card history-card" role="dialog" aria-modal="true" aria-labelledby="history-title">
         <div className="editor-heading"><div><p className="eyebrow">WEIGHT TRACKING</p><h2 id="history-title">{historyExercise.name}</h2><p className="muted">Recorded weight changes</p></div><button className="close-button" aria-label="Close history" onClick={() => setHistoryExercise(null)}>×</button></div>
-        {historyLoading ? <div className="empty-state"><div className="loading-dot" /><p>Loading history…</p></div> : weightHistory.length === 0 ? <div className="empty-state"><p>No weight changes recorded yet.</p></div> : <div className="history-list">{weightHistory.map(entry => <div className="history-entry" key={entry.id}><div className="history-entry-info">{historyEditingId === entry.id ? <input className="history-edit-input" type="number" min="0" step="0.01" value={historyEditValue} onChange={event => setHistoryEditValue(event.target.value)} aria-label="Correct historical weight" /> : <strong>{displayWeight(Number(entry.numeric_value), weightUnit).toFixed(2).replace(/\.00$/, '')} {weightUnit}</strong>}<span>{new Date(entry.changed_at).toLocaleString()}</span></div><div className="history-entry-actions">{historyEditingId === entry.id ? <><button className="quiet-button" disabled={historySaving} onClick={() => void saveHistoricalWeight(entry.id)}>{historySaving ? 'Saving…' : 'Save'}</button><button className="quiet-button" onClick={() => setHistoryEditingId(null)}>Cancel</button></> : <><button className="quiet-button" onClick={() => { setHistoryEditingId(entry.id); setHistoryEditValue(String(Number(displayWeight(Number(entry.numeric_value), weightUnit).toFixed(2)))) }}>Edit</button><button className="quiet-button archive-button" onClick={() => void deleteHistoricalWeight(entry.id)}>Delete</button></>}</div></div>)}</div>}
+        {historyLoading ? <div className="empty-state"><div className="loading-dot" /><p>Loading history…</p></div> : weightHistory.length === 0 ? <div className="empty-state"><p>No weight changes recorded yet.</p></div> : <div className="history-list">{weightHistory.map(entry => <div className="history-entry" key={entry.id}><div className="history-entry-info">{historyEditingId === entry.id ? <input className="history-edit-input" type="number" min="0" step="0.01" value={historyEditValue} onChange={event => setHistoryEditValue(event.target.value)} aria-label="Correct historical weight" /> : <strong>{entry.value_key === 'current_weight_low' ? 'Low: ' : entry.value_key === 'current_weight_high' ? 'High: ' : ''}{displayWeight(Number(entry.numeric_value), weightUnit).toFixed(2).replace(/\.00$/, '')} {weightUnit}</strong>}<span>{new Date(entry.changed_at).toLocaleString()}</span></div><div className="history-entry-actions">{historyEditingId === entry.id ? <><button className="quiet-button" disabled={historySaving} onClick={() => void saveHistoricalWeight(entry.id)}>{historySaving ? 'Saving…' : 'Save'}</button><button className="quiet-button" onClick={() => setHistoryEditingId(null)}>Cancel</button></> : <><button className="quiet-button" onClick={() => { setHistoryEditingId(entry.id); setHistoryEditValue(String(Number(displayWeight(Number(entry.numeric_value), weightUnit).toFixed(2)))) }}>Edit</button><button className="quiet-button archive-button" onClick={() => void deleteHistoricalWeight(entry.id)}>Delete</button></>}</div></div>)}</div>}
         <div className="editor-footer"><button className="quiet-button" onClick={() => setHistoryExercise(null)}>Close</button></div>
       </section>
     </div>}
