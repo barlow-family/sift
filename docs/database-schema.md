@@ -1,6 +1,6 @@
 # Sift Database Schema
 
-**Status:** Initial schema designed; migration committed but not yet applied to a Supabase project.
+**Status:** Initial schema applied successfully to the user's Supabase project. The user confirmed all 10 application tables were present and RLS was enabled.
 
 Migration: `supabase/migrations/20261118190000_initial_schema.sql`
 
@@ -82,7 +82,7 @@ Exercise deletion is not granted to authenticated users; the product operation i
 
 ## 6. Applying the migration
 
-This migration has been committed to the repository but has **not** been applied to a live Supabase project.
+The user has already applied this migration in the Supabase SQL Editor and confirmed that all 10 application tables are present with RLS enabled. The steps below are retained for reference when setting up a separate environment.
 
 1. Install the Supabase CLI and sign in.
 2. From the repository root, link the project with its Supabase project reference.
@@ -97,7 +97,7 @@ Do not put the database password, access token or service-role key in Git or fro
 
 - Generate TypeScript database types from the applied schema.
 - Add automated database/RLS tests using two separate test users.
-- Add a UI/service operation for converting lb input to canonical kg.
-- Add a UI for editing and deleting an incorrect historical weight entry.
-- Add archive/restore controls for exercises.
+- [x] Add a UI/service operation for converting lb input to canonical kg.
+- [x] Add a UI for editing and deleting an incorrect historical weight entry.
+- [x] Add archive/restore controls for exercises.
 - Decide whether the workspace display name should be editable in the first UI release.

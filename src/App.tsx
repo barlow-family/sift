@@ -13,6 +13,8 @@ type Exercise = {
   archived_at: string | null
   categories: string[]
 }
+type Routine = { id: string; name: string; description: string | null }
+type RoutineLink = { routine_id: string; item_id: string; position: number }
 type ExerciseDraft = { name: string; description: string; categories: string; isFavorite: boolean; weight: string }
 type WeightHistoryEntry = { id: string; numeric_value: number; unit: string; changed_at: string }
 const emptyDraft: ExerciseDraft = { name: '', description: '', categories: '', isFavorite: false, weight: '' }
@@ -36,13 +38,30 @@ export default function App() {
   const [historyExercise, setHistoryExercise] = useState<Exercise | null>(null)
   const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyEditingId, setHistoryEditingId] = useState<string | null>(null)
+  const [historyEditValue, setHistoryEditValue] = useState('')
+  const [historySaving, setHistorySaving] = useState(false)
   const [dataLoading, setDataLoading] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [search, setSearch] = useState('')
+  const [exerciseCategoryFilter, setExerciseCategoryFilter] = useState('')
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [routineSearch, setRoutineSearch] = useState('')
+  const [routineCategoryFilter, setRoutineCategoryFilter] = useState('')
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState<ExerciseDraft>(emptyDraft)
   const [saving, setSaving] = useState(false)
+  const [activeView, setActiveView] = useState<'exercises' | 'routines'>('exercises')
+  const [routines, setRoutines] = useState<Routine[]>([])
+  const [routineLinks, setRoutineLinks] = useState<RoutineLink[]>([])
+  const [selectedRoutineId, setSelectedRoutineId] = useState<string | null>(null)
+  const [routineName, setRoutineName] = useState('')
+  const [routineDescription, setRoutineDescription] = useState('')
+  const [routineEditorOpen, setRoutineEditorOpen] = useState(false)
+  const [routineEditingId, setRoutineEditingId] = useState<string | null>(null)
+  const [routineExerciseId, setRoutineExerciseId] = useState('')
+  const [routineSaving, setRoutineSaving] = useState(false)
 
   async function loadLibrary(datasetId: string) {
     if (!supabase) return
@@ -67,6 +86,15 @@ export default function App() {
       categories: categoriesByItem.get(item.id) ?? [],
     })))
     setWeights(Object.fromEntries((weightData ?? []).map(value => [value.item_id, Number(value.numeric_value)])))
+    await loadRoutines(datasetId)
+  }
+
+  async function loadRoutines(datasetId: string) {
+    if (!supabase) return
+    const [r, l] = await Promise.all([supabase.from('routines').select('id, name, description').eq('dataset_id', datasetId).order('name'), supabase.from('routine_items').select('routine_id, item_id, position').eq('dataset_id', datasetId).order('position')])
+    if (r.error || l.error) { setMessage(r.error?.message ?? l.error?.message ?? 'Could not load routines.'); return }
+    setRoutines(r.data ?? []); setRoutineLinks(l.data ?? [])
+    if (r.data?.length && !r.data.some(item => item.id === selectedRoutineId)) setSelectedRoutineId(r.data[0].id)
   }
 
   useEffect(() => {
@@ -269,6 +297,73 @@ export default function App() {
     setHistoryLoading(false)
   }
 
+  async function saveHistoricalWeight(entryId: string) {
+    if (!supabase || !historyEditValue.trim()) return
+    const value = Number(historyEditValue)
+    if (!Number.isFinite(value) || value < 0) { setMessage('Enter a valid weight of zero or more.'); return }
+    setHistorySaving(true)
+    const { error } = await supabase.from('item_value_history').update({ numeric_value: Number(storedWeight(value, weightUnit).toFixed(4)), unit: 'kg' }).eq('id', entryId)
+    if (error) setMessage(error.message)
+    else {
+      setWeightHistory(current => current.map(entry => entry.id === entryId ? { ...entry, numeric_value: Number(storedWeight(value, weightUnit).toFixed(4)), unit: 'kg' } : entry))
+      setHistoryEditingId(null)
+    }
+    setHistorySaving(false)
+  }
+
+  async function deleteHistoricalWeight(entryId: string) {
+    if (!supabase || !window.confirm('Delete this historical weight entry?')) return
+    const { error } = await supabase.from('item_value_history').delete().eq('id', entryId)
+    if (error) setMessage(error.message)
+    else setWeightHistory(current => current.filter(entry => entry.id !== entryId))
+  }
+
+  function openRoutine(routine?: Routine) {
+    setRoutineEditingId(routine?.id ?? null); setRoutineName(routine?.name ?? ''); setRoutineDescription(routine?.description ?? ''); setRoutineEditorOpen(true)
+  }
+  async function saveRoutine(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!supabase || !dataset || !routineName.trim()) return; setRoutineSaving(true)
+    const payload = { dataset_id: dataset.id, name: routineName.trim(), description: routineDescription.trim() || null }
+    const result = routineEditingId ? await supabase.from('routines').update(payload).eq('id', routineEditingId).select('id').single() : await supabase.from('routines').insert(payload).select('id').single()
+    if (result.error || !result.data) setMessage(result.error?.message ?? 'Could not save routine.')
+    else { await loadRoutines(dataset.id); setSelectedRoutineId(result.data.id); setRoutineEditorOpen(false) }
+    setRoutineSaving(false)
+  }
+  async function deleteRoutine(routine: Routine) {
+    if (!supabase || !dataset || !window.confirm('Delete this routine? Exercises themselves will not be deleted.')) return
+    const { error } = await supabase.from('routines').delete().eq('id', routine.id)
+    if (error) setMessage(error.message); else { setSelectedRoutineId(null); await loadRoutines(dataset.id) }
+  }
+  async function addRoutineExercise() {
+    if (!supabase || !dataset || !selectedRoutineId || !routineExerciseId) return
+    const current = routineLinks.filter(link => link.routine_id === selectedRoutineId)
+    if (current.some(link => link.item_id === routineExerciseId)) return
+    const { error } = await supabase.from('routine_items').insert({ dataset_id: dataset.id, routine_id: selectedRoutineId, item_id: routineExerciseId, position: current.length })
+    if (error) setMessage(error.message); else { setRoutineExerciseId(''); await loadRoutines(dataset.id) }
+  }
+  async function reorderRoutine(ids: string[]) {
+    if (!supabase || !dataset || !selectedRoutineId) return
+    const current = routineLinks.filter(link => link.routine_id === selectedRoutineId)
+    for (const link of current) {
+      const { error } = await supabase.from('routine_items').update({ position: link.position + 100000 }).eq('routine_id', selectedRoutineId).eq('item_id', link.item_id)
+      if (error) { setMessage(error.message); return }
+    }
+    for (let position = 0; position < ids.length; position++) {
+      const { error } = await supabase.from('routine_items').update({ position }).eq('routine_id', selectedRoutineId).eq('item_id', ids[position])
+      if (error) { setMessage(error.message); return }
+    }
+    await loadRoutines(dataset.id)
+  }
+  async function moveRoutineExercise(itemId: string, direction: number) {
+    const ordered = routineLinks.filter(link => link.routine_id === selectedRoutineId).sort((a,b) => a.position-b.position).map(link => link.item_id)
+    const i = ordered.indexOf(itemId); const j = i + direction; if (i < 0 || j < 0 || j >= ordered.length) return
+    ;[ordered[i], ordered[j]] = [ordered[j], ordered[i]]; await reorderRoutine(ordered)
+  }
+  async function removeRoutineExercise(itemId: string) {
+    const ids = routineLinks.filter(link => link.routine_id === selectedRoutineId && link.item_id !== itemId).sort((a,b) => a.position-b.position).map(link => link.item_id)
+    await reorderRoutine(ids)
+  }
+
   async function setArchived(exercise: Exercise, archived: boolean) {
     if (!supabase || !dataset) return
     setMessage('')
@@ -277,15 +372,26 @@ export default function App() {
     else await loadLibrary(dataset.id)
   }
 
+  const exerciseCategories = useMemo(() => [...new Set(exercises.flatMap(exercise => exercise.categories))].sort((a, b) => a.localeCompare(b)), [exercises])
   const visibleExercises = useMemo(() => exercises
     .filter(exercise => showArchived ? Boolean(exercise.archived_at) : !exercise.archived_at)
+    .filter(exercise => !exerciseCategoryFilter || exercise.categories.includes(exerciseCategoryFilter))
+    .filter(exercise => !favoritesOnly || exercise.is_favorite)
     .filter(exercise => {
       const query = search.trim().toLowerCase()
       return !query || exercise.name.toLowerCase().includes(query) ||
         (exercise.description ?? '').toLowerCase().includes(query) ||
         exercise.categories.some(category => category.toLowerCase().includes(query))
     })
-    .sort((a, b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name)), [exercises, search, showArchived])
+    .sort((a, b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name)), [exercises, search, showArchived, exerciseCategoryFilter, favoritesOnly])
+
+  const filteredRoutines = useMemo(() => routines.filter(routine => {
+    const query = routineSearch.trim().toLowerCase()
+    const linkedExercises = routineLinks.filter(link => link.routine_id === routine.id).map(link => exercises.find(exercise => exercise.id === link.item_id)).filter((exercise): exercise is Exercise => Boolean(exercise))
+    const matchesQuery = !query || routine.name.toLowerCase().includes(query) || (routine.description ?? '').toLowerCase().includes(query) || linkedExercises.some(exercise => exercise.name.toLowerCase().includes(query) || exercise.categories.some(category => category.toLowerCase().includes(query)))
+    const matchesCategory = !routineCategoryFilter || linkedExercises.some(exercise => exercise.categories.includes(routineCategoryFilter))
+    return matchesQuery && matchesCategory
+  }), [routines, routineLinks, exercises, routineSearch, routineCategoryFilter])
 
   if (!hasSupabaseConfig) {
     return <main className="center-page"><section className="notice-card"><div className="brand-mark">S</div><p className="eyebrow">SETUP REQUIRED</p><h1>Connect your Supabase project</h1><p className="muted">Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Netlify, then redeploy.</p></section></main>
@@ -316,16 +422,23 @@ export default function App() {
     <section className="dashboard">
       <div className="welcome-row"><div><p className="eyebrow">YOUR WORKSPACE</p><h1>{workspace?.name ?? 'Your training space'}</h1><p className="muted">A focused place for your exercises and routines.</p></div><span className="status-pill"><span /> CONNECTED</span></div>
       {message && <p className="feedback page-feedback" role="status">{message}</p>}
+      <div className="view-tabs"><button className={activeView === 'exercises' ? 'view-tab active' : 'view-tab'} onClick={() => setActiveView('exercises')}>Exercises</button><button className={activeView === 'routines' ? 'view-tab active' : 'view-tab'} onClick={() => setActiveView('routines')}>Routines</button></div>
+      {activeView === 'exercises' && <>
       <div className="section-heading"><div><p className="eyebrow">YOUR COLLECTION</p><h2>{dataset?.name ?? 'Gym'}</h2></div><div className="unit-setting"><span>WEIGHT UNIT</span><select value={weightUnit} onChange={event => void changeWeightUnit(event.target.value as 'kg' | 'lb')} aria-label="Preferred weight unit"><option value="kg">kg</option><option value="lb">lb</option></select><span className="count-label">{exercises.filter(item => !item.archived_at).length} ACTIVE EXERCISES</span></div></div>
       <div className="library-toolbar">
         <input className="search-input" type="search" placeholder="Search exercises or categories…" value={search} onChange={event => setSearch(event.target.value)} />
-        <div className="toolbar-actions"><button className={showArchived ? 'quiet-button selected-button' : 'quiet-button'} onClick={() => setShowArchived(!showArchived)}>{showArchived ? 'View active' : 'Archived'}</button><button className="primary-button add-button" onClick={openNewExercise}>＋ Add exercise</button></div>
+        <div className="toolbar-actions"><select className="filter-select" aria-label="Filter by category" value={exerciseCategoryFilter} onChange={event => setExerciseCategoryFilter(event.target.value)}><option value="">All categories</option>{exerciseCategories.map(category => <option key={category} value={category}>{category}</option>)}</select><button className={favoritesOnly ? 'quiet-button selected-button' : 'quiet-button'} onClick={() => setFavoritesOnly(!favoritesOnly)}>★ Favourites</button><button className={showArchived ? 'quiet-button selected-button' : 'quiet-button'} onClick={() => setShowArchived(!showArchived)}>{showArchived ? 'View active' : 'Archived'}</button><button className="primary-button add-button" onClick={openNewExercise}>＋ Add exercise</button></div>
       </div>
       {dataLoading ? <div className="empty-state"><div className="loading-dot" /><p>Loading your exercises…</p></div> : visibleExercises.length === 0 ? <div className="empty-state"><div className="empty-icon">＋</div><h3>{showArchived ? 'No archived exercises' : search ? 'No matching exercises' : 'Your exercise library starts here'}</h3><p>{showArchived ? 'Exercises you archive will appear here. You can restore them at any time.' : search ? 'Try another search, or add a new exercise.' : 'Add your exercises, organise them with categories and mark your favourites.'}</p>{!showArchived && !search && <button className="primary-button add-button" onClick={openNewExercise}>Add your first exercise</button>}</div> : <div className="exercise-list">{visibleExercises.map(exercise => <article className="exercise-row" key={exercise.id}>
         <div className="exercise-main"><div className="exercise-title-line"><h3>{exercise.name}</h3>{exercise.is_favorite && <span className="favorite">★ FAVOURITE</span>}</div>{weights[exercise.id] !== undefined && <p className="current-weight">{displayWeight(weights[exercise.id], weightUnit).toFixed(2).replace(/\.00$/, '')} {weightUnit} <span>CURRENT WEIGHT</span></p>}{exercise.description && <p>{exercise.description}</p>}{exercise.categories.length > 0 && <div className="category-chips">{exercise.categories.map(category => <span className="category-chip" key={category}>{category}</span>)}</div>}</div>
         <div className="exercise-actions">{showArchived ? <button className="quiet-button" onClick={() => void setArchived(exercise, false)}>Restore</button> : <><button className="quiet-button" onClick={() => void openWeightHistory(exercise)}>History</button><button className="quiet-button" onClick={() => openEditExercise(exercise)}>Edit</button><button className="quiet-button archive-button" onClick={() => void setArchived(exercise, true)}>Archive</button></>}</div>
       </article>)}</div>}
+      </>}
+      {activeView === 'routines' && <section className="routines-section"><div className="section-heading"><div><p className="eyebrow">YOUR TRAINING PLANS</p><h2>Routines</h2><p className="muted">Reusable collections of exercises, arranged in your preferred order.</p></div><button className="primary-button add-button" onClick={() => openRoutine()}>＋ New routine</button></div>
+        {routines.length === 0 ? <div className="empty-state"><h3>No routines yet</h3><p>Create a routine, then add exercises from your Gym library.</p><button className="primary-button add-button" onClick={() => openRoutine()}>Create routine</button></div> : <><div className="routine-filters"><input className="search-input" type="search" placeholder="Search routines or exercises…" value={routineSearch} onChange={event => setRoutineSearch(event.target.value)} /><select className="filter-select" aria-label="Filter routines by exercise category" value={routineCategoryFilter} onChange={event => setRoutineCategoryFilter(event.target.value)}><option value="">All exercise categories</option>{exerciseCategories.map(category => <option key={category} value={category}>{category}</option>)}</select><button className="quiet-button" onClick={() => { setRoutineSearch(''); setRoutineCategoryFilter('') }}>Clear filters</button></div>{filteredRoutines.length === 0 ? <div className="empty-state compact-empty"><p>No routines match these filters.</p></div> : <div className="routine-layout"><aside className="routine-sidebar">{filteredRoutines.map(r => <button key={r.id} className={selectedRoutineId === r.id ? 'routine-choice chosen' : 'routine-choice'} onClick={() => setSelectedRoutineId(r.id)}><strong>{r.name}</strong><span>{routineLinks.filter(l => l.routine_id === r.id).length} exercises</span></button>)}</aside><div className="routine-detail">{(() => { const selected = routines.find(r => r.id === selectedRoutineId); const allLinks = routineLinks.filter(l => l.routine_id === selectedRoutineId).sort((a,b) => a.position-b.position); const links = routineCategoryFilter ? allLinks.filter(link => exercises.find(exercise => exercise.id === link.item_id)?.categories.includes(routineCategoryFilter)) : allLinks; const available = exercises.filter(e => !e.archived_at && !allLinks.some(l => l.item_id === e.id)); return selected ? <><div className="routine-detail-heading"><div><h3>{selected.name}</h3>{selected.description && <p className="muted">{selected.description}</p>}</div><div className="toolbar-actions"><button className="quiet-button" onClick={() => openRoutine(selected)}>Edit</button><button className="quiet-button archive-button" onClick={() => void deleteRoutine(selected)}>Delete</button></div></div><div className="add-to-routine"><select value={routineExerciseId} onChange={e => setRoutineExerciseId(e.target.value)}><option value="">Choose an exercise…</option>{available.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select><button className="primary-button add-button" disabled={!routineExerciseId} onClick={() => void addRoutineExercise()}>Add</button></div>{links.length === 0 ? <div className="empty-state compact-empty"><p>No exercises in this routine yet.</p></div> : <div className="exercise-list">{links.map((link,index) => { const exercise = exercises.find(e => e.id === link.item_id); return exercise ? <article className="exercise-row" key={link.item_id}><div className="routine-position">{index+1}</div><div className="exercise-main"><h3>{exercise.name}</h3></div><div className="exercise-actions">{!routineCategoryFilter && <><button className="quiet-button" disabled={index===0} onClick={() => void moveRoutineExercise(link.item_id,-1)}>↑</button><button className="quiet-button" disabled={index===links.length-1} onClick={() => void moveRoutineExercise(link.item_id,1)}>↓</button></>}<button className="quiet-button archive-button" onClick={() => void removeRoutineExercise(link.item_id)}>Remove</button></div></article> : null })}</div>}</> : <p className="muted">Select a routine.</p> })()}</div></div>}</>}
+      </section>}
     </section>
+    {routineEditorOpen && <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setRoutineEditorOpen(false) }}><section className="editor-card" role="dialog" aria-modal="true"><div className="editor-heading"><div><p className="eyebrow">ROUTINE BUILDER</p><h2>{routineEditingId ? 'Edit routine' : 'Create routine'}</h2></div><button className="close-button" onClick={() => setRoutineEditorOpen(false)}>×</button></div><form className="exercise-form" onSubmit={saveRoutine}><label>Routine name<input autoFocus value={routineName} onChange={e => setRoutineName(e.target.value)} placeholder="e.g. Upper body" required maxLength={100}/></label><label>Description <span className="optional-label">OPTIONAL</span><textarea rows={3} value={routineDescription} onChange={e => setRoutineDescription(e.target.value)} placeholder="What is this routine for?"/></label><div className="editor-footer"><button type="button" className="quiet-button" onClick={() => setRoutineEditorOpen(false)}>Cancel</button><button className="primary-button add-button" disabled={routineSaving}>{routineSaving ? 'Saving…' : 'Save routine'}</button></div></form></section></div>}
     {editorOpen && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setEditorOpen(false) }}>
       <section className="editor-card" role="dialog" aria-modal="true" aria-labelledby="editor-title">
         <div className="editor-heading"><div><p className="eyebrow">EXERCISE LIBRARY</p><h2 id="editor-title">{editingId ? 'Edit exercise' : 'Add an exercise'}</h2></div><button className="close-button" aria-label="Close" onClick={() => setEditorOpen(false)}>×</button></div>
@@ -342,7 +455,7 @@ export default function App() {
     {historyExercise && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setHistoryExercise(null) }}>
       <section className="editor-card history-card" role="dialog" aria-modal="true" aria-labelledby="history-title">
         <div className="editor-heading"><div><p className="eyebrow">WEIGHT TRACKING</p><h2 id="history-title">{historyExercise.name}</h2><p className="muted">Recorded weight changes</p></div><button className="close-button" aria-label="Close history" onClick={() => setHistoryExercise(null)}>×</button></div>
-        {historyLoading ? <div className="empty-state"><div className="loading-dot" /><p>Loading history…</p></div> : weightHistory.length === 0 ? <div className="empty-state"><p>No weight changes recorded yet.</p></div> : <div className="history-list">{weightHistory.map(entry => <div className="history-entry" key={entry.id}><strong>{displayWeight(Number(entry.numeric_value), weightUnit).toFixed(2).replace(/\.00$/, '')} {weightUnit}</strong><span>{new Date(entry.changed_at).toLocaleString()}</span></div>)}</div>}
+        {historyLoading ? <div className="empty-state"><div className="loading-dot" /><p>Loading history…</p></div> : weightHistory.length === 0 ? <div className="empty-state"><p>No weight changes recorded yet.</p></div> : <div className="history-list">{weightHistory.map(entry => <div className="history-entry" key={entry.id}><div className="history-entry-info">{historyEditingId === entry.id ? <input className="history-edit-input" type="number" min="0" step="0.01" value={historyEditValue} onChange={event => setHistoryEditValue(event.target.value)} aria-label="Correct historical weight" /> : <strong>{displayWeight(Number(entry.numeric_value), weightUnit).toFixed(2).replace(/\.00$/, '')} {weightUnit}</strong>}<span>{new Date(entry.changed_at).toLocaleString()}</span></div><div className="history-entry-actions">{historyEditingId === entry.id ? <><button className="quiet-button" disabled={historySaving} onClick={() => void saveHistoricalWeight(entry.id)}>{historySaving ? 'Saving…' : 'Save'}</button><button className="quiet-button" onClick={() => setHistoryEditingId(null)}>Cancel</button></> : <><button className="quiet-button" onClick={() => { setHistoryEditingId(entry.id); setHistoryEditValue(String(Number(displayWeight(Number(entry.numeric_value), weightUnit).toFixed(2)))) }}>Edit</button><button className="quiet-button archive-button" onClick={() => void deleteHistoricalWeight(entry.id)}>Delete</button></>}</div></div>)}</div>}
         <div className="editor-footer"><button className="quiet-button" onClick={() => setHistoryExercise(null)}>Close</button></div>
       </section>
     </div>}
