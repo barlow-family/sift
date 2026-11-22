@@ -17,6 +17,8 @@ erDiagram
   ITEMS ||--o{ ITEM_CATEGORIES : classified_by
   CATEGORIES ||--o{ ITEM_CATEGORIES : classifies
   ROUTINES ||--o{ ROUTINE_ITEMS : contains
+  ROUTINES ||--o{ ROUTINE_CATEGORIES : classified_by
+  CATEGORIES ||--o{ ROUTINE_CATEGORIES : classifies
   ITEMS ||--o{ ROUTINE_ITEMS : included_in
   ITEMS ||--o{ ITEM_VALUES : has
   ITEMS ||--o{ ITEM_VALUE_HISTORY : tracks
@@ -36,6 +38,7 @@ Each Auth user receives one private workspace. The workspace receives a default 
 | `item_categories` | Many-to-many item/category links |
 | `routines` | Named, reusable exercise collections |
 | `routine_items` | Ordered exercise links within routines |
+| `routine_categories` | Category restrictions assigned to a routine |
 | `item_values` | Current named numeric values for an item |
 | `item_value_history` | Dated snapshots of value changes |
 
@@ -47,6 +50,7 @@ Each Auth user receives one private workspace. The workspace receives a default 
 - `items.archived_at` marks an archived record. Archiving does not delete its history or routine links.
 - `routine_items.position` controls exercise order. Position values must be unique within a routine; the constraint is deferred until transaction commit so a multi-row reorder can safely swap positions.
 - An exercise can belong to multiple routines and categories.
+- `routine_categories` stores the categories selected for each routine. When adding exercises, selected muscle groups are OR-matched with one another, selected equipment/other categories are OR-matched with one another, and the two groups are AND-matched. An empty group does not restrict the picker.
 - `categories.category_type` determines which category filter displays a label. The UI currently groups `muscle_group` separately; other types (such as `equipment` and `general`) appear in the equipment/other filter. New category types can be added without adding another hard-coded filter.
 - `categories.category_type` determines which category filter displays a label. The UI currently groups `muscle_group` separately; other types (such as `equipment` and `general`) appear in the equipment/other filter. New category types can be added without adding another hard-coded filter.
 - Composite foreign keys ensure that routines, items and categories linked together belong to the same dataset.
